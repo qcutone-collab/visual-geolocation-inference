@@ -1,6 +1,8 @@
+.idea/
 .venv/
 data/
 models/
 __pycache__/
 *.npy
 *.pth
+.streamlit/secrets.toml
