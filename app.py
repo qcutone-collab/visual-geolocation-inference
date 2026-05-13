@@ -715,23 +715,42 @@ if uploaded_file is not None:
                         )
                 except Exception as exc:
                     err_lower = str(exc).lower()
-                    code_401 = (
-                        "401" in str(exc)
-                        or "invalid_api_key" in err_lower
-                        or (
-                            APIStatusError is not None
-                            and isinstance(exc, APIStatusError)
-                            and getattr(exc, "status_code", None) == 401
-                        )
-                    )
-                    if code_401:
+                    if "insufficient_quota" in err_lower or "exceeded your current quota" in err_lower:
                         st.error(
-                            "**OpenAI rejected the API key (401).** Open "
-                            "[API keys](https://platform.openai.com/api-keys), copy a **Secret key**, "
-                            "then under **Show configuration** use **Clear pasted API key** if needed and save again in **API access**."
+                            "**OpenAI account has no usable credits (429 — insufficient quota).** "
+                            "This is not a bug in GeoVision: your API key is valid, but the **organization behind that key** "
+                            "has no remaining budget or is on a free tier that cannot run this model. "
+                            "Open [Billing](https://platform.openai.com/account/billing) and "
+                            "[Usage limits](https://platform.openai.com/account/limits), add a payment method or credits if needed, "
+                            "then try again."
+                        )
+                    elif (
+                        "429" in str(exc)
+                        and "insufficient_quota" not in err_lower
+                        and "quota" not in err_lower
+                    ):
+                        st.error(
+                            "**Rate limited (429).** OpenAI is temporarily throttling requests. "
+                            "Wait a minute and try again, or check [status.openai.com](https://status.openai.com)."
                         )
                     else:
-                        st.error(f"Inference failed: {exc}")
+                        code_401 = (
+                            "401" in str(exc)
+                            or "invalid_api_key" in err_lower
+                            or (
+                                APIStatusError is not None
+                                and isinstance(exc, APIStatusError)
+                                and getattr(exc, "status_code", None) == 401
+                            )
+                        )
+                        if code_401:
+                            st.error(
+                                "**OpenAI rejected the API key (401).** Open "
+                                "[API keys](https://platform.openai.com/api-keys), copy a **Secret key**, "
+                                "then under **Show configuration** use **Clear pasted API key** if needed and save again in **API access**."
+                            )
+                        else:
+                            st.error(f"Inference failed: {exc}")
         st.markdown("</div>", unsafe_allow_html=True)
 
 st.markdown(
