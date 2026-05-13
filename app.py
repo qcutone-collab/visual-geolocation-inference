@@ -497,8 +497,27 @@ except Exception:
 
 _raw_session_key = (st.session_state.get("OPENAI_API_KEY") or "").strip()
 _secrets_key_stripped = (secrets_key or "").strip() if secrets_key else ""
-# Pasted session key always wins so Streamlit Cloud secrets cannot override the user's paste.
-api_key = _raw_session_key or _secrets_key_stripped or None
+
+if _secrets_key_stripped:
+    with st.expander("Using Streamlit Community Cloud?", expanded=False):
+        st.markdown(
+            "This deployment has **`OPENAI_API_KEY` in Streamlit Secrets**. That value is used **until you paste** "
+            "a key under **API access** on **this same URL** (Cloud and `localhost` do not share session or secrets UI).\n\n"
+            "If **localhost works** but **Cloud shows 401**, the Secret is almost always wrong, truncated, or a placeholder. "
+            "Fix it in [Streamlit Cloud](https://streamlit.io/cloud) → your app → **⚙ Settings → Secrets**, "
+            "or paste your real key here and click **Save**."
+        )
+        st.checkbox(
+            "Ignore `OPENAI_API_KEY` from Streamlit secrets (I will paste my key in API access)",
+            key="gv_ignore_openai_secret",
+            help="Turn on to stop sending the Cloud secret to OpenAI until you paste a key below.",
+        )
+
+_secrets_effective = (
+    "" if st.session_state.get("gv_ignore_openai_secret") else _secrets_key_stripped
+)
+# Pasted session key always wins over secrets (unless secrets are ignored entirely above).
+api_key = _raw_session_key or _secrets_effective or None
 session_has_pasted_key = bool(_raw_session_key)
 
 st.session_state.setdefault("geovision_model_id", "gpt-4.1-mini")
@@ -543,9 +562,13 @@ if show_configuration:
             if st.button("Clear pasted API key", help="Remove the key stored in this session only."):
                 st.session_state.pop("OPENAI_API_KEY", None)
                 st.rerun()
-        elif _secrets_key_stripped:
+        elif _secrets_effective:
             st.info(
                 "No pasted key yet. Inference will use **`OPENAI_API_KEY` from Streamlit secrets** until you paste and save a key above."
+            )
+        elif _secrets_key_stripped and st.session_state.get("gv_ignore_openai_secret"):
+            st.warning(
+                "You chose to **ignore** the Streamlit secret. Paste your key under **API access** above, then save."
             )
         else:
             st.caption("Paste your key in **API access** above, or add `OPENAI_API_KEY` in Streamlit secrets.")
@@ -744,10 +767,13 @@ if uploaded_file is not None:
                             )
                         )
                         if code_401:
+                            _src = "your **pasted** session key" if session_has_pasted_key else "**Streamlit `OPENAI_API_KEY` secret** (Community Cloud → app → Settings → Secrets)"
                             st.error(
-                                "**OpenAI rejected the API key (401).** Open "
-                                "[API keys](https://platform.openai.com/api-keys), copy a **Secret key**, "
-                                "then under **Show configuration** use **Clear pasted API key** if needed and save again in **API access**."
+                                f"**OpenAI rejected the API key (401).** The request used {_src}. "
+                                "Keys on **localhost** are not copied to **Cloud** automatically.\n\n"
+                                "- If you use **Streamlit Secrets**: open [Streamlit Cloud](https://streamlit.io/cloud) → your app → **Settings → Secrets** "
+                                "and set `OPENAI_API_KEY` to the **full** secret from [OpenAI API keys](https://platform.openai.com/api-keys), or delete it and paste only in this app.\n"
+                                "- Expand **Using Streamlit Community Cloud?** above and try **Ignore … secret**, then paste under **API access** and **Save API key**."
                             )
                         else:
                             st.error(f"Inference failed: {exc}")
