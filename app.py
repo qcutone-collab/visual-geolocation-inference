@@ -4,15 +4,13 @@ import json
 
 import streamlit as st
 
+_OPENAI_BOOT_ERROR: str | None = None
 try:
-    from openai import OpenAI
-except ImportError:
-    OpenAI = None
-
-try:
-    from openai import APIStatusError
-except ImportError:
-    APIStatusError = None
+    from openai import APIStatusError, OpenAI
+except Exception as exc:
+    OpenAI = None  # type: ignore[misc, assignment]
+    APIStatusError = None  # type: ignore[misc, assignment]
+    _OPENAI_BOOT_ERROR = f"{type(exc).__name__}: {exc}"
 
 
 st.set_page_config(
@@ -569,7 +567,18 @@ if uploaded_file is not None:
         st.markdown('<p class="gv-col-title">Inference output</p>', unsafe_allow_html=True)
         st.markdown('<div class="gv-results-shell">', unsafe_allow_html=True)
         if OpenAI is None:
-            st.error("The `openai` package is required. Install with `pip install openai`.")
+            st.error(
+                "The **openai** Python package is not available in this environment, so inference cannot run."
+            )
+            st.markdown(
+                "- **Local:** activate your venv, then run `pip install -r requirements.txt` (or `pip install openai`), "
+                "restart Streamlit, and refresh the page.\n"
+                "- **Streamlit Community Cloud:** confirm **`requirements.txt`** at the **repo root** lists `openai`, "
+                "then **Reboot** the app (Manage app → ⋮ → Reboot) so dependencies reinstall."
+            )
+            if _OPENAI_BOOT_ERROR:
+                with st.expander("Technical details"):
+                    st.code(_OPENAI_BOOT_ERROR, language="text")
         elif not api_key:
             st.warning("Scroll up to **API access**, paste your OpenAI API key, and click **Save API key**.")
         else:
