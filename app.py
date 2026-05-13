@@ -1,16 +1,49 @@
 import base64
 import html
 import json
+import subprocess
+import sys
+
+
+def _bootstrap_openai():
+    """Load OpenAI SDK. If the package is missing, try once to pip-install then re-import."""
+    try:
+        from openai import APIStatusError, OpenAI
+
+        return OpenAI, APIStatusError, None
+    except ModuleNotFoundError as first:
+        try:
+            subprocess.check_call(
+                [
+                    sys.executable,
+                    "-m",
+                    "pip",
+                    "install",
+                    "--quiet",
+                    "openai>=1.54.0",
+                    "httpx>=0.27.0",
+                ],
+                timeout=240,
+            )
+        except Exception as pip_exc:
+            return None, None, f"Missing openai ({first!r}); pip install failed: {pip_exc}"
+        try:
+            from openai import APIStatusError, OpenAI
+
+            return OpenAI, APIStatusError, None
+        except Exception as second:
+            return (
+                None,
+                None,
+                f"After pip install, import still failed: {type(second).__name__}: {second}",
+            )
+    except Exception as exc:
+        return None, None, f"{type(exc).__name__}: {exc}"
+
+
+OpenAI, APIStatusError, _OPENAI_BOOT_ERROR = _bootstrap_openai()
 
 import streamlit as st
-
-_OPENAI_BOOT_ERROR: str | None = None
-try:
-    from openai import APIStatusError, OpenAI
-except Exception as exc:
-    OpenAI = None  # type: ignore[misc, assignment]
-    APIStatusError = None  # type: ignore[misc, assignment]
-    _OPENAI_BOOT_ERROR = f"{type(exc).__name__}: {exc}"
 
 
 st.set_page_config(
@@ -407,6 +440,21 @@ div[data-testid="column"] > div {
 
 st.markdown(GEO_CSS, unsafe_allow_html=True)
 
+if OpenAI is None:
+    st.error(
+        "The **openai** Python package is not available, so inference cannot run. "
+        "The app just tried `pip install openai` automatically; if this message remains, install manually or fix your host."
+    )
+    st.markdown(
+        "- **Local:** in the same environment you use for Streamlit, run `pip install -r requirements.txt`, "
+        "then stop and restart `streamlit run`.\n"
+        "- **Streamlit Community Cloud:** ensure **`requirements.txt`** is at the **repository root** (next to `app.py`), "
+        "then **Manage app → Reboot**."
+    )
+    if _OPENAI_BOOT_ERROR:
+        with st.expander("Technical details"):
+            st.code(_OPENAI_BOOT_ERROR, language="text")
+
 st.markdown(
     """
     <div class="gv-nav">
@@ -567,18 +615,7 @@ if uploaded_file is not None:
         st.markdown('<p class="gv-col-title">Inference output</p>', unsafe_allow_html=True)
         st.markdown('<div class="gv-results-shell">', unsafe_allow_html=True)
         if OpenAI is None:
-            st.error(
-                "The **openai** Python package is not available in this environment, so inference cannot run."
-            )
-            st.markdown(
-                "- **Local:** activate your venv, then run `pip install -r requirements.txt` (or `pip install openai`), "
-                "restart Streamlit, and refresh the page.\n"
-                "- **Streamlit Community Cloud:** confirm **`requirements.txt`** at the **repo root** lists `openai`, "
-                "then **Reboot** the app (Manage app → ⋮ → Reboot) so dependencies reinstall."
-            )
-            if _OPENAI_BOOT_ERROR:
-                with st.expander("Technical details"):
-                    st.code(_OPENAI_BOOT_ERROR, language="text")
+            st.warning("**openai** is not installed in this environment. Use the red **alert at the top** of the page for install steps and technical details.")
         elif not api_key:
             st.warning("Scroll up to **API access**, paste your OpenAI API key, and click **Save API key**.")
         else:
