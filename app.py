@@ -13,7 +13,7 @@ st.set_page_config(
     page_title="GeoVision — Visual geolocation",
     page_icon="🌍",
     layout="wide",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="collapsed",
 )
 
 GEO_CSS = """
@@ -395,7 +395,7 @@ st.markdown(
                 <p class="gv-product-tag">Visual geolocation intelligence</p>
             </div>
         </div>
-        <p class="gv-nav-meta">Production-style inference UI · API key on the page when needed; model in the sidebar</p>
+        <p class="gv-nav-meta">Production-style inference UI · Use the configuration toggle below when you need the model or API session tools</p>
     </div>
     """,
     unsafe_allow_html=True,
@@ -428,12 +428,13 @@ except Exception:
 _raw_session_key = st.session_state.get("OPENAI_API_KEY") or ""
 api_key = (secrets_key or _raw_session_key).strip() or None
 
+st.session_state.setdefault("geovision_model_id", "gpt-4.1-mini")
+
 if not api_key:
     st.markdown('<p class="gv-section-label">API access</p>', unsafe_allow_html=True)
     st.markdown('<div class="gv-panel">', unsafe_allow_html=True)
     st.markdown(
-        "**OpenAI API key** — paste your full key, then click **Save API key** "
-        "(password-style fields in the sidebar often block pasting in some browsers)."
+        "**OpenAI API key** — paste your full key, then click **Save API key**."
     )
     with st.form("geovision_api_key_form", clear_on_submit=False):
         key_field = st.text_area(
@@ -453,9 +454,16 @@ if not api_key:
             st.warning("Paste your API key into the box, then click Save again.")
     st.markdown("</div>", unsafe_allow_html=True)
 
-with st.sidebar:
-    st.markdown("##### Configuration")
-    st.caption("API credentials and model selection")
+show_configuration = st.toggle(
+    "Show configuration",
+    value=True,
+    key="gv_show_configuration",
+    help="Model ID, API status, and clear key — stays on the page; turn off for a cleaner layout.",
+)
+
+if show_configuration:
+    st.markdown('<p class="gv-section-label">Configuration</p>', unsafe_allow_html=True)
+    st.markdown('<div class="gv-panel">', unsafe_allow_html=True)
     if secrets_key:
         st.info("Using `OPENAI_API_KEY` from Streamlit secrets.")
     elif api_key:
@@ -464,14 +472,16 @@ with st.sidebar:
             st.session_state.pop("OPENAI_API_KEY", None)
             st.rerun()
     else:
-        st.caption("Enter your key in the **API access** panel above.")
+        st.caption("Paste your key in **API access** above when this section is open.")
 
     model_name = st.text_input(
         "Model identifier",
-        value="gpt-4.1-mini",
         help="Any vision-capable model supported by the Responses API.",
         key="geovision_model_id",
     )
+    st.markdown("</div>", unsafe_allow_html=True)
+else:
+    model_name = st.session_state["geovision_model_id"]
 
 st.markdown('<p class="gv-section-label">Data input</p>', unsafe_allow_html=True)
 st.markdown('<div class="gv-panel">', unsafe_allow_html=True)
@@ -498,7 +508,7 @@ if uploaded_file is None:
                 <div class="gv-step">
                     <div class="gv-step-num">Step 02</div>
                     <h3>Upload &amp; authorize</h3>
-                    <p>Use the <strong>API access</strong> section above if you need to paste a key. Keys stay in this session unless you use secrets.</p>
+                    <p>Turn on <strong>Show configuration</strong> if you need the model or session tools. Keys stay in this session unless you use secrets.</p>
                 </div>
                 <div class="gv-step">
                     <div class="gv-step-num">Step 03</div>
