@@ -164,6 +164,22 @@ html, body, [class*="stApp"] {
     box-shadow: 0 0 0 1px rgba(255,255,255,0.02), 0 24px 48px -24px rgba(0,0,0,0.45);
     backdrop-filter: blur(12px);
 }
+
+/* Streamlit bordered containers used for widget groups (avoid split raw <div> around widgets) */
+[class*="st-key-gv_api_access"],
+[class*="st-key-gv_configuration"],
+[class*="st-key-gv_data_input"] {
+    margin-bottom: 1.5rem;
+}
+[class*="st-key-gv_api_access"] [data-testid="stVerticalBlockBorder"],
+[class*="st-key-gv_configuration"] [data-testid="stVerticalBlockBorder"],
+[class*="st-key-gv_data_input"] [data-testid="stVerticalBlockBorder"] {
+    background: var(--gv-surface) !important;
+    border: 1px solid var(--gv-border) !important;
+    border-radius: 18px !important;
+    box-shadow: 0 0 0 1px rgba(255,255,255,0.02), 0 24px 48px -24px rgba(0,0,0,0.45);
+    backdrop-filter: blur(12px);
+}
 .gv-section-label {
     font-family: "IBM Plex Mono", monospace;
     font-size: 0.7rem;
@@ -194,6 +210,8 @@ html, body, [class*="stApp"] {
     border-radius: 10px !important;
     color: var(--gv-text) !important;
     font-size: 0.9rem !important;
+    pointer-events: auto !important;
+    caret-color: var(--gv-accent) !important;
 }
 
 /* Empty state steps */
@@ -432,27 +450,27 @@ st.session_state.setdefault("geovision_model_id", "gpt-4.1-mini")
 
 if not api_key:
     st.markdown('<p class="gv-section-label">API access</p>', unsafe_allow_html=True)
-    st.markdown('<div class="gv-panel">', unsafe_allow_html=True)
-    st.markdown(
-        "**OpenAI API key** — paste your full key, then click **Save API key**."
-    )
-    with st.form("geovision_api_key_form", clear_on_submit=False):
-        key_field = st.text_area(
-            "Key",
-            height=88,
+    with st.container(border=True, key="gv_api_access"):
+        st.markdown(
+            "**OpenAI API key** — type or paste below, then click **Save API key**."
+        )
+        st.text_area(
+            "OpenAI API key",
+            height=100,
             placeholder="sk-…",
-            label_visibility="collapsed",
+            key="gv_openai_key_draft",
             help="Stored only in this Streamlit session unless you use Streamlit secrets.",
         )
-        submitted = st.form_submit_button("Save API key")
-    if submitted:
-        cleaned = "".join((key_field or "").split())
+        save_api_key = st.button("Save API key", type="primary", key="gv_save_openai_key")
+    if save_api_key:
+        draft = (st.session_state.get("gv_openai_key_draft") or "").strip()
+        cleaned = "".join(draft.split())
         if cleaned:
             st.session_state["OPENAI_API_KEY"] = cleaned
+            st.session_state.pop("gv_openai_key_draft", None)
             st.rerun()
         else:
-            st.warning("Paste your API key into the box, then click Save again.")
-    st.markdown("</div>", unsafe_allow_html=True)
+            st.warning("Enter your API key in the box, then click Save again.")
 
 show_configuration = st.toggle(
     "Show configuration",
@@ -463,36 +481,34 @@ show_configuration = st.toggle(
 
 if show_configuration:
     st.markdown('<p class="gv-section-label">Configuration</p>', unsafe_allow_html=True)
-    st.markdown('<div class="gv-panel">', unsafe_allow_html=True)
-    if secrets_key:
-        st.info("Using `OPENAI_API_KEY` from Streamlit secrets.")
-    elif api_key:
-        st.success("Session API key active")
-        if st.button("Clear session API key", help="Remove the pasted key from this session only."):
-            st.session_state.pop("OPENAI_API_KEY", None)
-            st.rerun()
-    else:
-        st.caption("Paste your key in **API access** above when this section is open.")
+    with st.container(border=True, key="gv_configuration"):
+        if secrets_key:
+            st.info("Using `OPENAI_API_KEY` from Streamlit secrets.")
+        elif api_key:
+            st.success("Session API key active")
+            if st.button("Clear session API key", help="Remove the pasted key from this session only."):
+                st.session_state.pop("OPENAI_API_KEY", None)
+                st.rerun()
+        else:
+            st.caption("Paste your key in **API access** above when this section is open.")
 
-    model_name = st.text_input(
-        "Model identifier",
-        help="Any vision-capable model supported by the Responses API.",
-        key="geovision_model_id",
-    )
-    st.markdown("</div>", unsafe_allow_html=True)
+        model_name = st.text_input(
+            "Model identifier",
+            help="Any vision-capable model supported by the Responses API.",
+            key="geovision_model_id",
+        )
 else:
     model_name = st.session_state["geovision_model_id"]
 
 st.markdown('<p class="gv-section-label">Data input</p>', unsafe_allow_html=True)
-st.markdown('<div class="gv-panel">', unsafe_allow_html=True)
-uploaded_file = st.file_uploader(
-    "Image upload",
-    type=["jpg", "png", "jpeg"],
-    help="JPEG or PNG · Clear daylight shots and readable signage improve accuracy.",
-    label_visibility="collapsed",
-)
-st.caption("Drag and drop, or click to browse · Max quality depends on source resolution")
-st.markdown("</div>", unsafe_allow_html=True)
+with st.container(border=True, key="gv_data_input"):
+    uploaded_file = st.file_uploader(
+        "Image upload",
+        type=["jpg", "png", "jpeg"],
+        help="JPEG or PNG · Clear daylight shots and readable signage improve accuracy.",
+        label_visibility="collapsed",
+    )
+    st.caption("Drag and drop, or click to browse · Max quality depends on source resolution")
 
 if uploaded_file is None:
     st.markdown(
