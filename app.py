@@ -1,8 +1,10 @@
 import base64
 import html
 import json
+import os
 import subprocess
 import sys
+from contextlib import contextmanager
 
 
 def _bootstrap_openai():
@@ -42,6 +44,36 @@ def _bootstrap_openai():
 
 
 OpenAI, APIStatusError, _OPENAI_BOOT_ERROR = _bootstrap_openai()
+
+
+def _normalize_openai_key(raw: str) -> str:
+    """Strip BOM/zero-width chars and outer quotes (common when copying from TOML or docs)."""
+    s = (raw or "").replace("\ufeff", "")
+    for z in ("\u200b", "\u200c", "\u200d", "\u2060"):
+        s = s.replace(z, "")
+    s = "".join(s.split())
+    if len(s) >= 2 and ((s[0] == s[-1] == '"') or (s[0] == s[-1] == "'")):
+        s = s[1:-1].strip()
+    return s.strip()
+
+
+@contextmanager
+def _pasted_key_openai_env(session_uses_pasted_key: bool):
+    """Streamlit injects secrets into os.environ. The OpenAI client also reads
+    OPENAI_ORG_ID / OPENAI_PROJECT_ID from the environment; a stale Cloud secret there
+    can cause 401 even when the pasted API key is correct."""
+    if not session_uses_pasted_key:
+        yield
+        return
+    keys = ("OPENAI_API_KEY", "OPENAI_ORG_ID", "OPENAI_PROJECT_ID")
+    backup = {k: os.environ.pop(k, None) for k in keys}
+    try:
+        yield
+    finally:
+        for k, v in backup.items():
+            if v is not None:
+                os.environ[k] = v
+
 
 import streamlit as st
 
@@ -495,8 +527,8 @@ try:
 except Exception:
     secrets_key = None
 
-_raw_session_key = (st.session_state.get("OPENAI_API_KEY") or "").strip()
-_secrets_key_stripped = (secrets_key or "").strip() if secrets_key else ""
+_raw_session_key = _normalize_openai_key(st.session_state.get("OPENAI_API_KEY") or "")
+_secrets_key_stripped = _normalize_openai_key(secrets_key or "") if secrets_key else ""
 
 if _secrets_key_stripped:
     with st.expander("Using Streamlit Community Cloud?", expanded=False):
@@ -505,7 +537,9 @@ if _secrets_key_stripped:
             "a key under **API access** on **this same URL** (Cloud and `localhost` do not share session or secrets UI).\n\n"
             "If **localhost works** but **Cloud shows 401**, the Secret is almost always wrong, truncated, or a placeholder. "
             "Fix it in [Streamlit Cloud](https://streamlit.io/cloud) → your app → **⚙ Settings → Secrets**, "
-            "or paste your real key here and click **Save**."
+            "or paste your real key here and click **Save**.\n\n"
+            "**Also check:** if Secrets include **`OPENAI_ORG_ID`** or **`OPENAI_PROJECT_ID`**, they must match the same "
+            "OpenAI org/project as your key (stale values cause **401** even for a correct pasted key). Remove them if unsure."
         )
         st.checkbox(
             "Ignore `OPENAI_API_KEY` from Streamlit secrets (I will paste my key in API access)",
@@ -539,7 +573,7 @@ if not api_key:
         save_api_key = st.button("Save API key", type="primary", key="gv_save_openai_key")
     if save_api_key:
         draft = (st.session_state.get("gv_openai_key_draft") or "").strip()
-        cleaned = "".join(draft.split())
+        cleaned = _normalize_openai_key("".join(draft.split()))
         if cleaned:
             st.session_state["OPENAI_API_KEY"] = cleaned
             st.session_state.pop("gv_openai_key_draft", None)
@@ -559,6 +593,8 @@ if show_configuration:
     with st.container(border=True, key="gv_configuration"):
         if session_has_pasted_key:
             st.success("Inference will use your **pasted** API key (this session).")
+            if len(api_key) >= 8:
+                st.caption(f"Key fingerprint: ends with `···{api_key[-4:]}` — confirm this matches your OpenAI dashboard.")
             if st.button("Clear pasted API key", help="Remove the key stored in this session only."):
                 st.session_state.pop("OPENAI_API_KEY", None)
                 st.rerun()
@@ -642,7 +678,6 @@ if uploaded_file is not None:
         elif not api_key:
             st.warning("Scroll up to **API access**, paste your OpenAI API key, and click **Save API key**.")
         else:
-            client = OpenAI(api_key=api_key)
             image_bytes = uploaded_file.getvalue()
             image_b64 = base64.b64encode(image_bytes).decode("utf-8")
             mime_type = uploaded_file.type or "image/jpeg"
@@ -661,18 +696,20 @@ if uploaded_file is not None:
 
             with st.spinner("Running multimodal analysis…"):
                 try:
-                    response = client.responses.create(
-                        model=model_name,
-                        input=[
-                            {
-                                "role": "user",
-                                "content": [
-                                    {"type": "input_text", "text": prompt},
-                                    {"type": "input_image", "image_url": data_url},
-                                ],
-                            }
-                        ],
-                    )
+                    with _pasted_key_openai_env(session_has_pasted_key):
+                        client = OpenAI(api_key=api_key)
+                        response = client.responses.create(
+                            model=model_name,
+                            input=[
+                                {
+                                    "role": "user",
+                                    "content": [
+                                        {"type": "input_text", "text": prompt},
+                                        {"type": "input_image", "image_url": data_url},
+                                    ],
+                                }
+                            ],
+                        )
                     text = response.output_text.strip()
 
                     try:
@@ -773,7 +810,9 @@ if uploaded_file is not None:
                                 "Keys on **localhost** are not copied to **Cloud** automatically.\n\n"
                                 "- If you use **Streamlit Secrets**: open [Streamlit Cloud](https://streamlit.io/cloud) → your app → **Settings → Secrets** "
                                 "and set `OPENAI_API_KEY` to the **full** secret from [OpenAI API keys](https://platform.openai.com/api-keys), or delete it and paste only in this app.\n"
-                                "- Expand **Using Streamlit Community Cloud?** above and try **Ignore … secret**, then paste under **API access** and **Save API key**."
+                                "- Remove **`OPENAI_ORG_ID`** / **`OPENAI_PROJECT_ID`** from Secrets unless they match the same org/project as that key (wrong values cause 401).\n"
+                                "- Expand **Using Streamlit Community Cloud?** above and try **Ignore … secret**, then paste under **API access** and **Save API key**.\n\n"
+                                "When you use a pasted key, this app temporarily clears `OPENAI_API_KEY`, `OPENAI_ORG_ID`, and `OPENAI_PROJECT_ID` from the process environment for that API call so a stale Cloud secret cannot override your paste."
                             )
                         else:
                             st.error(f"Inference failed: {exc}")
