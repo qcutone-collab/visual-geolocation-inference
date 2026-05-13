@@ -9,6 +9,56 @@ try:
 except ImportError:
     OpenAI = None
 
+try:
+    from openai import APIStatusError
+except ImportError:
+    APIStatusError = None
+
+
+def _openai_key_looks_valid(key: str) -> tuple[bool, str]:
+    """Reject empty, tutorial-style, or obviously truncated keys before calling OpenAI."""
+    k = (key or "").strip()
+    if not k:
+        return False, "Key is empty."
+    if not k.startswith("sk-"):
+        return (
+            False,
+            "The value should start with **sk-**. Copy the full **Secret key** from "
+            "[OpenAI API keys](https://platform.openai.com/api-keys), not a placeholder from docs.",
+        )
+    # Real OpenAI user keys are long; README / tutorial snippets are usually short.
+    if len(k) < 40:
+        return (
+            False,
+            "That value is too short to be a real OpenAI secret. Open the key row on "
+            "[platform.openai.com/api-keys](https://platform.openai.com/api-keys), click **Reveal**, "
+            "and paste the **entire** string (often 50+ characters).",
+        )
+    low = k.lower()
+    bad_snippets = (
+        "sk-your",
+        "your_key",
+        "your-key",
+        "yourapi",
+        "xxxx",
+        "paste",
+        "example",
+        "placeholder",
+        "changeme",
+        "replace_me",
+        "sk-...",
+        "api_key_here",
+    )
+    for snip in bad_snippets:
+        if snip in low:
+            return (
+                False,
+                f'This still looks like **example text** (contains “{snip}”). Use your real secret from '
+                "[platform.openai.com/api-keys](https://platform.openai.com/api-keys).",
+            )
+    return True, ""
+
+
 st.set_page_config(
     page_title="GeoVision — Visual geolocation",
     page_icon="🌍",
@@ -457,7 +507,7 @@ if not api_key:
         st.text_area(
             "OpenAI API key",
             height=100,
-            placeholder="sk-…",
+            placeholder="Paste the full sk-… key from platform.openai.com/api-keys",
             key="gv_openai_key_draft",
             help="Stored only in this Streamlit session unless you use Streamlit secrets.",
         )
@@ -465,12 +515,16 @@ if not api_key:
     if save_api_key:
         draft = (st.session_state.get("gv_openai_key_draft") or "").strip()
         cleaned = "".join(draft.split())
-        if cleaned:
-            st.session_state["OPENAI_API_KEY"] = cleaned
-            st.session_state.pop("gv_openai_key_draft", None)
-            st.rerun()
-        else:
+        if not cleaned:
             st.warning("Enter your API key in the box, then click Save again.")
+        else:
+            ok, err = _openai_key_looks_valid(cleaned)
+            if ok:
+                st.session_state["OPENAI_API_KEY"] = cleaned
+                st.session_state.pop("gv_openai_key_draft", None)
+                st.rerun()
+            else:
+                st.error(err)
 
 show_configuration = st.toggle(
     "Show configuration",
@@ -483,7 +537,11 @@ if show_configuration:
     st.markdown('<p class="gv-section-label">Configuration</p>', unsafe_allow_html=True)
     with st.container(border=True, key="gv_configuration"):
         if secrets_key:
-            st.info("Using `OPENAI_API_KEY` from Streamlit secrets.")
+            _sk_ok, _sk_msg = _openai_key_looks_valid(secrets_key)
+            if _sk_ok:
+                st.info("Using `OPENAI_API_KEY` from Streamlit secrets.")
+            else:
+                st.error(f"**Streamlit secrets:** {_sk_msg}")
         elif api_key:
             st.success("Session API key active")
             if st.button("Clear session API key", help="Remove the pasted key from this session only."):
@@ -561,102 +619,127 @@ if uploaded_file is not None:
         elif not api_key:
             st.warning("Scroll up to **API access**, paste your OpenAI API key, and click **Save API key**.")
         else:
-            client = OpenAI(api_key=api_key)
-            image_bytes = uploaded_file.getvalue()
-            image_b64 = base64.b64encode(image_bytes).decode("utf-8")
-            mime_type = uploaded_file.type or "image/jpeg"
-            data_url = f"data:{mime_type};base64,{image_b64}"
+            _ok_key, _key_err = _openai_key_looks_valid(api_key)
+            if not _ok_key:
+                st.error(_key_err)
+                st.caption(
+                    "Turn on **Show configuration** and use **Clear session API key**, "
+                    "then save a real key from [OpenAI](https://platform.openai.com/api-keys)."
+                )
+            else:
+                client = OpenAI(api_key=api_key)
+                image_bytes = uploaded_file.getvalue()
+                image_b64 = base64.b64encode(image_bytes).decode("utf-8")
+                mime_type = uploaded_file.type or "image/jpeg"
+                data_url = f"data:{mime_type};base64,{image_b64}"
 
-            prompt = (
-                "You are a geolocation assistant. Based only on visual clues in this image, "
-                "predict the most likely country.\n"
-                "Return strict JSON with keys:\n"
-                "country_guess (string),\n"
-                "top_3_countries (array of exactly 3 objects with country and confidence),\n"
-                "confidence (number 0-100),\n"
-                "reasoning_signals (array of short strings).\n"
-                "Keep confidence realistic and avoid overconfidence."
-            )
+                prompt = (
+                    "You are a geolocation assistant. Based only on visual clues in this image, "
+                    "predict the most likely country.\n"
+                    "Return strict JSON with keys:\n"
+                    "country_guess (string),\n"
+                    "top_3_countries (array of exactly 3 objects with country and confidence),\n"
+                    "confidence (number 0-100),\n"
+                    "reasoning_signals (array of short strings).\n"
+                    "Keep confidence realistic and avoid overconfidence."
+                )
 
-            with st.spinner("Running multimodal analysis…"):
-                try:
-                    response = client.responses.create(
-                        model=model_name,
-                        input=[
-                            {
-                                "role": "user",
-                                "content": [
-                                    {"type": "input_text", "text": prompt},
-                                    {"type": "input_image", "image_url": data_url},
-                                ],
-                            }
-                        ],
-                    )
-                    text = response.output_text.strip()
-
+                with st.spinner("Running multimodal analysis…"):
                     try:
-                        result = json.loads(text)
-                    except json.JSONDecodeError:
-                        start = text.find("{")
-                        end = text.rfind("}")
-                        if start >= 0 and end > start:
-                            result = json.loads(text[start : end + 1])
-                        else:
-                            raise
+                        response = client.responses.create(
+                            model=model_name,
+                            input=[
+                                {
+                                    "role": "user",
+                                    "content": [
+                                        {"type": "input_text", "text": prompt},
+                                        {"type": "input_image", "image_url": data_url},
+                                    ],
+                                }
+                            ],
+                        )
+                        text = response.output_text.strip()
 
-                    st.markdown(
-                        '<p style="margin:0 0 0.9rem 0;font-size:0.72rem;font-weight:600;letter-spacing:0.14em;text-transform:uppercase;color:#94a3b8;">Ranked hypotheses</p>',
-                        unsafe_allow_html=True,
-                    )
-                    for i, item in enumerate(result.get("top_3_countries", []), start=1):
-                        country = item.get("country", "Unknown")
-                        country_safe = html.escape(str(country))
                         try:
-                            conf = float(item.get("confidence", 0) or 0)
-                        except (TypeError, ValueError):
-                            conf = 0.0
-                        conf = max(0.0, min(100.0, conf))
-                        row_cls = f"gv-rank-row gv-rank-row--{min(i, 3)}"
-                        pct = f"{conf:.0f}"
-                        bar_w = f"{conf:.1f}"
+                            result = json.loads(text)
+                        except json.JSONDecodeError:
+                            start = text.find("{")
+                            end = text.rfind("}")
+                            if start >= 0 and end > start:
+                                result = json.loads(text[start : end + 1])
+                            else:
+                                raise
+
                         st.markdown(
-                            f'<div class="{row_cls}">'
-                            f'<span class="gv-rank-idx">{i:02d}</span>'
-                            f'<div class="gv-rank-body">'
-                            f'<div class="gv-rank-name">{country_safe}</div>'
-                            f'<div class="gv-bar-track"><div class="gv-bar-fill" style="width:{bar_w}%;"></div></div>'
-                            f"</div>"
-                            f'<span class="gv-rank-pct">{pct}%</span>'
+                            '<p style="margin:0 0 0.9rem 0;font-size:0.72rem;font-weight:600;letter-spacing:0.14em;text-transform:uppercase;color:#94a3b8;">Ranked hypotheses</p>',
+                            unsafe_allow_html=True,
+                        )
+                        for i, item in enumerate(result.get("top_3_countries", []), start=1):
+                            country = item.get("country", "Unknown")
+                            country_safe = html.escape(str(country))
+                            try:
+                                conf = float(item.get("confidence", 0) or 0)
+                            except (TypeError, ValueError):
+                                conf = 0.0
+                            conf = max(0.0, min(100.0, conf))
+                            row_cls = f"gv-rank-row gv-rank-row--{min(i, 3)}"
+                            pct = f"{conf:.0f}"
+                            bar_w = f"{conf:.1f}"
+                            st.markdown(
+                                f'<div class="{row_cls}">'
+                                f'<span class="gv-rank-idx">{i:02d}</span>'
+                                f'<div class="gv-rank-body">'
+                                f'<div class="gv-rank-name">{country_safe}</div>'
+                                f'<div class="gv-bar-track"><div class="gv-bar-fill" style="width:{bar_w}%;"></div></div>'
+                                f"</div>"
+                                f'<span class="gv-rank-pct">{pct}%</span>'
+                                f"</div>",
+                                unsafe_allow_html=True,
+                            )
+
+                        final_country = result.get("country_guess", "Unknown")
+                        final_safe = html.escape(str(final_country))
+                        try:
+                            final_conf = float(result.get("confidence", 0) or 0)
+                        except (TypeError, ValueError):
+                            final_conf = 0.0
+                        final_conf = max(0.0, min(100.0, final_conf))
+
+                        st.markdown(
+                            f'<div class="gv-final">'
+                            f'<div class="gv-final-label">Primary prediction</div>'
+                            f'<p class="gv-final-country">{final_safe}</p>'
+                            f'<div class="gv-final-conf">{final_conf:.0f}% model confidence</div>'
                             f"</div>",
                             unsafe_allow_html=True,
                         )
 
-                    final_country = result.get("country_guess", "Unknown")
-                    final_safe = html.escape(str(final_country))
-                    try:
-                        final_conf = float(result.get("confidence", 0) or 0)
-                    except (TypeError, ValueError):
-                        final_conf = 0.0
-                    final_conf = max(0.0, min(100.0, final_conf))
-
-                    st.markdown(
-                        f'<div class="gv-final">'
-                        f'<div class="gv-final-label">Primary prediction</div>'
-                        f'<p class="gv-final-country">{final_safe}</p>'
-                        f'<div class="gv-final-conf">{final_conf:.0f}% model confidence</div>'
-                        f"</div>",
-                        unsafe_allow_html=True,
-                    )
-
-                    signals = result.get("reasoning_signals", [])
-                    if signals:
-                        clues = ", ".join(html.escape(str(s)) for s in signals[:10])
-                        st.markdown(
-                            f'<div class="gv-clues"><strong>Reasoning signals</strong><br/><span style="display:block;margin-top:0.5rem;">{clues}</span></div>',
-                            unsafe_allow_html=True,
+                        signals = result.get("reasoning_signals", [])
+                        if signals:
+                            clues = ", ".join(html.escape(str(s)) for s in signals[:10])
+                            st.markdown(
+                                f'<div class="gv-clues"><strong>Reasoning signals</strong><br/><span style="display:block;margin-top:0.5rem;">{clues}</span></div>',
+                                unsafe_allow_html=True,
+                            )
+                    except Exception as exc:
+                        err_lower = str(exc).lower()
+                        code_401 = (
+                            "401" in str(exc)
+                            or "invalid_api_key" in err_lower
+                            or (
+                                APIStatusError is not None
+                                and isinstance(exc, APIStatusError)
+                                and getattr(exc, "status_code", None) == 401
+                            )
                         )
-                except Exception as exc:
-                    st.error(f"Inference failed: {exc}")
+                        if code_401:
+                            st.error(
+                                "**OpenAI rejected the API key (401).** Open "
+                                "[API keys](https://platform.openai.com/api-keys), create or copy a **Secret key**, "
+                                "then use **Clear session API key** (under **Show configuration**) and paste it again in **API access**."
+                            )
+                        else:
+                            st.error(f"Inference failed: {exc}")
         st.markdown("</div>", unsafe_allow_html=True)
 
 st.markdown(
