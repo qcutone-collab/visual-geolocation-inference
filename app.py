@@ -13,7 +13,7 @@ st.set_page_config(
     page_title="GeoVision — Visual geolocation",
     page_icon="🌍",
     layout="wide",
-    initial_sidebar_state="collapsed",
+    initial_sidebar_state="expanded",
 )
 
 GEO_CSS = """
@@ -187,7 +187,8 @@ html, body, [class*="stApp"] {
 }
 [data-testid="stFileUploader"] section small { color: var(--gv-muted) !important; font-size: 0.8rem !important; }
 
-.stTextInput input {
+.stTextInput input,
+.stTextArea textarea {
     background-color: rgba(8, 12, 18, 0.85) !important;
     border: 1px solid var(--gv-border) !important;
     border-radius: 10px !important;
@@ -394,7 +395,7 @@ st.markdown(
                 <p class="gv-product-tag">Visual geolocation intelligence</p>
             </div>
         </div>
-        <p class="gv-nav-meta">Production-style inference UI · Configure API access in the sidebar</p>
+        <p class="gv-nav-meta">Production-style inference UI · API key on the page when needed; model in the sidebar</p>
     </div>
     """,
     unsafe_allow_html=True,
@@ -418,29 +419,59 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+secrets_key = None
+try:
+    secrets_key = st.secrets.get("OPENAI_API_KEY")
+except Exception:
+    secrets_key = None
+
+_raw_session_key = st.session_state.get("OPENAI_API_KEY") or ""
+api_key = (secrets_key or _raw_session_key).strip() or None
+
+if not api_key:
+    st.markdown('<p class="gv-section-label">API access</p>', unsafe_allow_html=True)
+    st.markdown('<div class="gv-panel">', unsafe_allow_html=True)
+    st.markdown(
+        "**OpenAI API key** — paste your full key, then click **Save API key** "
+        "(password-style fields in the sidebar often block pasting in some browsers)."
+    )
+    with st.form("geovision_api_key_form", clear_on_submit=False):
+        key_field = st.text_area(
+            "Key",
+            height=88,
+            placeholder="sk-…",
+            label_visibility="collapsed",
+            help="Stored only in this Streamlit session unless you use Streamlit secrets.",
+        )
+        submitted = st.form_submit_button("Save API key")
+    if submitted:
+        cleaned = "".join((key_field or "").split())
+        if cleaned:
+            st.session_state["OPENAI_API_KEY"] = cleaned
+            st.rerun()
+        else:
+            st.warning("Paste your API key into the box, then click Save again.")
+    st.markdown("</div>", unsafe_allow_html=True)
+
 with st.sidebar:
     st.markdown("##### Configuration")
     st.caption("API credentials and model selection")
-    secrets_key = None
-    try:
-        secrets_key = st.secrets.get("OPENAI_API_KEY")
-    except Exception:
-        secrets_key = None
-
-    api_key = secrets_key or st.session_state.get("OPENAI_API_KEY")
-    if not api_key:
-        api_key_input = st.text_input(
-            "OpenAI API key",
-            type="password",
-            help="Stored in this browser session unless configured in Streamlit secrets.",
-        )
-        if api_key_input:
-            st.session_state["OPENAI_API_KEY"] = api_key_input
-            api_key = api_key_input
+    if secrets_key:
+        st.info("Using `OPENAI_API_KEY` from Streamlit secrets.")
+    elif api_key:
+        st.success("Session API key active")
+        if st.button("Clear session API key", help="Remove the pasted key from this session only."):
+            st.session_state.pop("OPENAI_API_KEY", None)
+            st.rerun()
     else:
-        st.success("API key loaded")
+        st.caption("Enter your key in the **API access** panel above.")
 
-    model_name = st.text_input("Model identifier", value="gpt-4.1-mini", help="Any vision-capable model supported by the Responses API.")
+    model_name = st.text_input(
+        "Model identifier",
+        value="gpt-4.1-mini",
+        help="Any vision-capable model supported by the Responses API.",
+        key="geovision_model_id",
+    )
 
 st.markdown('<p class="gv-section-label">Data input</p>', unsafe_allow_html=True)
 st.markdown('<div class="gv-panel">', unsafe_allow_html=True)
@@ -467,7 +498,7 @@ if uploaded_file is None:
                 <div class="gv-step">
                     <div class="gv-step-num">Step 02</div>
                     <h3>Upload &amp; authorize</h3>
-                    <p>Add your API key in the sidebar if prompted. Keys stay in this session unless you use secrets.</p>
+                    <p>Use the <strong>API access</strong> section above if you need to paste a key. Keys stay in this session unless you use secrets.</p>
                 </div>
                 <div class="gv-step">
                     <div class="gv-step-num">Step 03</div>
@@ -502,7 +533,7 @@ if uploaded_file is not None:
         if OpenAI is None:
             st.error("The `openai` package is required. Install with `pip install openai`.")
         elif not api_key:
-            st.warning("Open the sidebar (☰) and enter your OpenAI API key to run inference.")
+            st.warning("Scroll up to **API access**, paste your OpenAI API key, and click **Save API key**.")
         else:
             client = OpenAI(api_key=api_key)
             image_bytes = uploaded_file.getvalue()
